@@ -6,12 +6,19 @@ library(feasts)
 library(tsibble)
 library(lubridate)
 
+# save and import coronavirus data from Johns Hopkins University, with system date in filenames for posterity
+corona_url = "https://github.com/CSSEGISandData/COVID-19/"
+corona_confirmed = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Confirmed.csv",
+                                 paste0("data\\",Sys.Date(),"_confirmedcases.csv"))
+corona_deaths = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Deaths.csv",
+                              paste0("data\\",Sys.Date(),"_deaths.csv"))
+corona_recovered = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Recovered.csv",
+                                 paste0("data\\",Sys.Date(),"_recovered.csv"))
 # read in data on confirmed cases, deaths and recoveries
-covid_confirmed = fread("COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Confirmed.csv")[,data:="confirmed"]
-covid_deaths = fread("COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Deaths.csv")[,data:="deaths"]
-covid_recovered = fread("COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Recovered.csv")[,data:="recovered"]
-# join datasets and drop latitude, longitude, and province/state data (only interested in nations, but can re-add Victoria)
-covid_data = rbindlist(list(covid_confirmed, covid_deaths, covid_recovered))[,`:=`(Lat=NULL, Long=NULL, `Province/State`=NULL)]
+covid_confirmed = fread(corona_confirmed)[,data:="confirmed"]
+covid_deaths = fread(corona_deaths)[,data:="deaths"]
+covid_recovered = fread(corona_recovered)[,data:="recovered"]
+
 # aggregate data by country
 covid_data = covid_data[,lapply(.SD, sum), keyby=.(`Country/Region`, data)]
 # melt to long form data, and convert dates to actual Date object

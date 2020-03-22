@@ -7,38 +7,41 @@ library(magrittr)
 library(data.table)
 library(ggthemes)
 library(lubridate)
+library(fable)
+library(feasts)
+library(tsibble)
 
-# source("T:/TIGR_EFP/REVENUE AND TAXATION/Tools/DTF Style Guides/DTF Tax and Gambling ggtheme.R")
-
-# save and import population data from world bank (2018)
+# save and import population data from World Bank (2018)
 wb_population_url = "http://api.worldbank.org/v2/en/indicator/SP.POP.TOTL?downloadformat=csv"
 # check if data file already exists, download if not
-if (length(list.files("resources", pattern="^API_SP.POP.TOTL"))==0){
+if (length(list.files("data", pattern="^API_SP.POP.TOTL")) == 0){
     file = curl_download(wb_population_url, tempfile())
     data_files = zip_list(file) %>% .$filename  %>% str_subset("^API_SP.POP.TOTL")
-    unzip(file, data_files, exdir = "resources")
+    unzip(file, data_files, exdir = "data")
 }
 
 # read to data.table and keep only country and 2018 population
-population = fread(list.files("resources", pattern="^API_SP.POP.TOTL", full.names=TRUE), skip = 4, header = TRUE)[,.(country_region=`Country Name`,population=`2018`)][,country_region:=ifelse(country_region=="United States", "US", country_region)]
+population = fread(list.files("data", pattern="^API_SP.POP.TOTL", full.names=TRUE), skip = 4, header = TRUE)[,.(country_region=`Country Name`,population=`2018`)][,country_region:=ifelse(country_region=="United States", "US", country_region)]
 
 countries_investigated = c("Victoria",
                            "Australia")
 
 # save and import coronavirus data from Johns Hopkins University, with system date in filenames for posterity
 corona_url = "https://github.com/CSSEGISandData/COVID-19/"
-corona_confirmed = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Confirmed.csv",
-                                 paste0("resources\\",Sys.Date(),"_confirmedcases.csv"))
-corona_deaths = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Deaths.csv",
-                              paste0("resources\\",Sys.Date(),"_deaths.csv"))
-corona_recovered = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Recovered.csv",
-                                 paste0("resources\\",Sys.Date(),"_recovered.csv"))
+if (length(list.files("data",as.character(Sys.Date()))) < 3){
+    corona_confirmed = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Confirmed.csv",
+                                     paste0("data\\",Sys.Date(),"_confirmedcases.csv"))
+    corona_deaths = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Deaths.csv",
+                                  paste0("data\\",Sys.Date(),"_deaths.csv"))
+    corona_recovered = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Recovered.csv",
+                                     paste0("data\\",Sys.Date(),"_recovered.csv"))
+}
 
 
 # read in data on confirmed cases, deaths and recoveries
-covid_confirmed = fread(corona_confirmed)[,data:="confirmed"]
-covid_deaths = fread(corona_deaths)[,data:="deaths"]
-covid_recovered = fread(corona_recovered)[,data:="recovered"]
+covid_confirmed = fread(paste0("data\\",Sys.Date(),"_confirmedcases.csv"))[,data:="confirmed"]
+covid_deaths = fread(paste0("data\\",Sys.Date(),"_confirmedcases.csv"))[,data:="deaths"]
+covid_recovered = fread(paste0("data\\",Sys.Date(),"_confirmedcases.csv"))[,data:="recovered"]
 # join datasets and drop latitude, longitude, and province/state data (only interested in nations, but can re-add Victoria)
 covid_data = rbindlist(list(covid_confirmed, covid_deaths, covid_recovered))[,`:=`(Lat=NULL, Long=NULL, `Province/State`=NULL)]
 # aggregate data by country
@@ -76,57 +79,74 @@ cov_growth = cov_growth[end_dates==1,
                          by=country_region]
 growth_quartiles = quantile(cov_growth$cagr)
 
+vic_covid_cases_tsibble = vic_covid_data %>% 
+    filter(country_region == "Victoria",
+           data == "confirmed") %>% 
+    as_tsibble(key = country_region, index = date)
+
+cases_fit_vic = vic_covid_cases_tsibble %>% 
+    model(cases_arima = ARIMA(value))
+percap_fit_vic = vic_covid_cases_tsibble %>% 
+    model(percap_arima = ARIMA(value_per_cap))
+
 ui = fluidPage(
     title="COVID-19 Dashboard",
     mainPanel(width = 12,
               h2("Coronavirus (COVID-19) in Victoria"),
-              p("As at ",
-                format(most_recent_vic, "%d %B %Y"),
-                "Victoria had",
-                strong(vic_covid_data[date==most_recent_vic & data=="confirmed", value]),
-                "confirmed cases, or",
-                strong(scales::percent(vic_covid_data[date==most_recent_vic & data=="confirmed", value_per_cap], accuracy=0.001)),
-                "per cent of the population."),
-              p("The first case in Victoria was recognised on ",
-                format(first_case_vic, "%d %B %Y"),
-                ", reflecting an average growth rate of",
-                strong(scales::percent(cov_growth[country_region=="Victoria",cagr], accuracy = 0.1)),
-                "per day in comparison to an average rate of",
-                strong(scales::percent(cov_growth[,mean(cagr, na.rm=TRUE)], accuracy = 0.1)),
-                "among observed countries/regions."),
-              fluidRow(
-                  column(3,
-                         h4("Choose plotting options"),
-                         radioButtons("log", "Scale for y-axis:", choices = list("Linear Scale"=FALSE, "Log Scale"=TRUE)),
-                         materialSwitch("smooth", "Use smoothed curve:", value=TRUE),
-                         numericInput("smoothingfactor", "Smoothing factor:", value=15, min=1, max=100),
-                         selectInput("plotvariable",
-                                     "Variable:",
-                                     list("Confirmed Cases"="confirmed", "Deaths"="deaths", "Recovered"="recovered")),
-                         selectInput("percap",
-                                     "Values:",
-                                     list("Per Capita (2018)"="value_per_cap", "Total"="value")),
-                         dateRangeInput("date_range",
-                                        "Date Range:",
-                                        min = min(covid_data$date), 
-                                        max = max(covid_data$date),
-                                        start = min(covid_data$date), 
-                                        end = max(covid_data$date)),
-                         pickerInput("countries",
-                                     "Countries/Regions:",
-                                     choices=unique(covid_data$country_region),
-                                     selected=countries_investigated,
-                                     multiple=TRUE,
-                                     options = pickerOptions(actionsBox=TRUE))
-                  ),
-                  column(9, plotOutput("chooseplot", height = 600))
-              ),
-              h4("COVID-19 confirmed case CAGR distribution across nations from first case"),
-              plotOutput("growthplot"),
-              h4("Forecast of cases in Victoria"),
-              numericInput("forecastlength", "Forecast window (days):", min=1, value=10),
-              p("Dashed line reflects a 1st quartile CAGR relative to other nations, with the upper and lower bands reflecting a median CAGR and continuing current Victorian trends respectively."),
-              plotOutput("forecast")
+              tabsetPanel(
+                  tabPanel("Historical",
+                           br(),
+                           p("As at ",
+                             format(most_recent_vic, "%d %B %Y,"),
+                             "Victoria had",
+                             strong(vic_covid_data[date==most_recent_vic & data=="confirmed", value]),
+                             "confirmed cases, or",
+                             strong(scales::percent(vic_covid_data[date==most_recent_vic & data=="confirmed", value_per_cap], accuracy=0.001)),
+                             "per cent of the population."),
+                           p("The first case in Victoria was recognised on ",
+                             format(first_case_vic, "%d %B %Y"),
+                             ", reflecting an average growth rate of",
+                             strong(scales::percent(cov_growth[country_region=="Victoria",cagr], accuracy = 0.1)),
+                             "per day in comparison to an average rate of",
+                             strong(scales::percent(cov_growth[,mean(cagr, na.rm=TRUE)], accuracy = 0.1)),
+                             "among observed countries/regions."),
+                           fluidRow(
+                               column(3,
+                                      h4("Choose plotting options"),
+                                      radioButtons("log", "Scale for y-axis:", choices = list("Linear Scale"=FALSE, "Log Scale"=TRUE)),
+                                      materialSwitch("smooth", "Use smoothed curve:", value=TRUE),
+                                      numericInput("smoothingfactor", "Smoothing factor:", value=15, min=1, max=100),
+                                      selectInput("plotvariable",
+                                                  "Variable:",
+                                                  list("Confirmed Cases"="confirmed", "Deaths"="deaths", "Recovered"="recovered")),
+                                      selectInput("percap",
+                                                  "Values:",
+                                                  list("Per Capita (2018)"="value_per_cap", "Total"="value")),
+                                      dateRangeInput("date_range",
+                                                     "Date Range:",
+                                                     min = min(covid_data$date), 
+                                                     max = max(covid_data$date),
+                                                     start = min(covid_data$date), 
+                                                     end = max(covid_data$date)),
+                                      pickerInput("countries",
+                                                  "Countries/Regions:",
+                                                  choices=unique(covid_data$country_region),
+                                                  selected=countries_investigated,
+                                                  multiple=TRUE,
+                                                  options = pickerOptions(actionsBox=TRUE))
+                               ),
+                               column(9, plotOutput("chooseplot", height = 600))
+                           ),
+                           h4("COVID-19 confirmed case CAGR distribution across nations from first case"),
+                           plotOutput("growthplot")),
+                  tabPanel("Forecast",
+                      numericInput("forecastlength", "Forecast window (days):", min=1, value=10),
+                      h4("Simple CAGR-based Victorian forecasts"),
+                      p("Dashed line reflects the 1st quartile of international CAGR, with the upper and lower bands reflecting the international median CAGR and continuing current Victorian trends respectively."),
+                      plotOutput("forecast"),
+                      plotOutput("arimaforecast")
+                  )
+              )
     )  
 )
 
@@ -165,7 +185,6 @@ server = function(input, output){
                          labels = scales::label_date_short()) +
             xlab("Date") +
             ylab("Value") +
-            # scale_colour_dtf(palette_used(), name="Country", labels = waiver()) +
             scale_colour_hue(name="Country") +
             theme(legend.position = c(0,1),
                   legend.direction = "vertical",
@@ -178,6 +197,7 @@ server = function(input, output){
             ggplot(aes(cagr)) +
             geom_density(fill='grey20', alpha = 0.5) +
             geom_vline(xintercept = cov_growth[country_region=="Victoria",cagr]) +
+            annotate("text", x=cov_growth[country_region=="Victoria",cagr]+0.01, y=2.8, label="Victorian CAGR", hjust="left", ) +
             theme_tufte(base_size = 18) +
             geom_rangeframe() +
             scale_x_continuous(name = "CAGR", breaks = scales::breaks_extended(), labels = scales::label_percent(0.1)) +
@@ -217,6 +237,31 @@ server = function(input, output){
             geom_line(aes(date, low_forecast_per_cap), linetype="dashed") +
             geom_ribbon(aes(date, ymin=const_forecast_per_cap, ymax=med_forecast_per_cap),
                         alpha=0.4, fill="royalblue") +
+            scale_y_continuous(breaks = scales::breaks_extended(), labels = scales::label_percent()) +
+            scale_x_date(breaks = scales::breaks_width("1 week", 2),
+                         labels = scales::label_date_short()) +
+            xlab("Date") +
+            ylab("Percent of population")
+    })
+    
+    forecast_int = reactive({paste0(input$forecastlength," days")})
+    
+    output$arimaforecast = renderPlot({
+        cases_fit_vic %>% 
+            forecast(h=forecast_int()) %>% 
+            bind_rows(as_tibble(vic_covid_cases_tsibble), ., .id=".id") %>% 
+            fill(population) %>% 
+            mutate(fcast_value = ifelse(.id==2, value, NA),
+                   value = ifelse(.id==2, NA, value),
+                   fcast_value_per_cap = fcast_value/population) %>% 
+            filter(date>=(max(date)-days(30))) %>% 
+            ggplot() +
+            theme_tufte(base_size = 18) +
+            geom_rangeframe(aes(date, fcoalesce(value_per_cap, fcast_value_per_cap)), colour="grey20") +
+            geom_line(aes(date, value_per_cap)) +
+            geom_line(aes(date, fcast_value_per_cap), linetype="dashed") +
+            # geom_ribbon(aes(date, ymin=const_forecast_per_cap, ymax=med_forecast_per_cap),
+                        # alpha=0.4, fill="royalblue") +
             scale_y_continuous(breaks = scales::breaks_extended(), labels = scales::label_percent()) +
             scale_x_date(breaks = scales::breaks_width("1 week", 2),
                          labels = scales::label_date_short()) +
