@@ -3,6 +3,7 @@ library(shinyWidgets)
 library(curl)
 library(zip)
 library(tidyverse)
+library(DT)
 library(magrittr)
 library(data.table)
 library(ggthemes)
@@ -26,22 +27,11 @@ population = fread(list.files("data", pattern="^API_SP.POP.TOTL", full.names=TRU
 countries_investigated = c("Victoria",
                            "Australia")
 
-# save and import coronavirus data from Johns Hopkins University, with system date in filenames for posterity
+# save and import coronavirus data from Johns Hopkins University
 corona_url = "https://github.com/CSSEGISandData/COVID-19/"
-if (length(list.files("data",as.character(Sys.Date()))) < 3){
-    corona_confirmed = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Confirmed.csv",
-                                     paste0("data\\",Sys.Date(),"_confirmedcases.csv"))
-    corona_deaths = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Deaths.csv",
-                                  paste0("data\\",Sys.Date(),"_deaths.csv"))
-    corona_recovered = curl_download("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Recovered.csv",
-                                     paste0("data\\",Sys.Date(),"_recovered.csv"))
-}
-
-
-# read in data on confirmed cases, deaths and recoveries
-covid_confirmed = fread(paste0("data\\",Sys.Date(),"_confirmedcases.csv"))[,data:="confirmed"]
-covid_deaths = fread(paste0("data\\",Sys.Date(),"_confirmedcases.csv"))[,data:="deaths"]
-covid_recovered = fread(paste0("data\\",Sys.Date(),"_confirmedcases.csv"))[,data:="recovered"]
+covid_confirmed = fread("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Confirmed.csv")[,data:="confirmed"]
+covid_deaths = fread("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Deaths.csv")[,data:="deaths"]
+covid_recovered = fread("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-Recovered.csv")[,data:="recovered"]
 # join datasets and drop latitude, longitude, and province/state data (only interested in nations, but can re-add Victoria)
 covid_data = rbindlist(list(covid_confirmed, covid_deaths, covid_recovered))[,`:=`(Lat=NULL, Long=NULL, `Province/State`=NULL)]
 # aggregate data by country
@@ -77,7 +67,7 @@ cov_growth = cov_growth[end_dates==1,
                              .(cagr)
                          },
                          by=country_region]
-growth_quartiles = quantile(cov_growth$cagr)
+growth_quartiles = quantile(cov_growth$cagr, na.rm=TRUE)
 
 vic_covid_cases_tsibble = vic_covid_data %>% 
     filter(country_region == "Victoria",
@@ -139,9 +129,11 @@ ui = fluidPage(
                          column(9, plotOutput("chooseplot", height = 600))
                        ),
                        h4("COVID-19 confirmed case CAGR distribution across nations from first case"),
-                       plotOutput("growthplot")),
+                       plotOutput("growthplot"),
+                       h4("COVID-19 Dataset Tabulation per JHU"),
+                       DT::dataTableOutput("covid_DT")),
               tabPanel("Forecast",
-                       numericInput("forecastlength", "Forecast window (days):", min=1, value=10),
+                       numericInput("forecastlength", "Forecast window (days):", min=1, max=50, step = 1, value=10),
                        h4("Simple CAGR-based Victorian forecasts"),
                        p("Dashed line reflects the 1st quartile of international CAGR, with the upper and lower bands reflecting the international median CAGR and continuing current Victorian trends respectively."),
                        plotOutput("forecast"),
@@ -270,6 +262,10 @@ server = function(input, output){
       xlab("Date") +
       ylab("Percent of population")
   })
+  
+  output$covid_DT = DT::renderDataTable({
+    covid_data
+  }, filter = "top")
 }
 
 shinyApp(ui, server)
