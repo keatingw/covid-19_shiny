@@ -141,6 +141,7 @@ ui = fluidPage(
                        h4("COVID-19 confirmed case CAGR distribution across nations from first case"),
                        plotOutput("growthplot")),
               tabPanel("Forecast",
+                       br(),
                        numericInput("forecastlength", "Forecast window (days):", min=1, value=10),
                        h4("Simple CAGR-based Victorian forecasts"),
                        p("Dashed line reflects the 1st quartile of international CAGR, with the upper and lower bands reflecting the international median CAGR and continuing current Victorian trends respectively."),
